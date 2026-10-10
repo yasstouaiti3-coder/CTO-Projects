@@ -1,5 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
-import { db, dbStatus, iso } from "~/db";
+import { db, dbFailure, dbStatus, iso } from "~/db";
 import { currentUser, requireUser } from "~/server/session";
 import { oneStuckPrompt } from "~/server/ai";
 import type { NotConnected } from "~/server/auth";
@@ -177,63 +177,67 @@ export const pageSprint = createServerFn({ method: "POST" })
         message: status.message,
       };
     }
-    const user = await currentUser();
-    if (!user) return { kind: "signed_out" };
+    try {
+      const user = await currentUser();
+      if (!user) return { kind: "signed_out" };
 
-    const sql = await db();
-    const rows = await sql<{
-      id: string;
-      task_id: string;
-      task_title: string;
-      planned_minutes: number;
-      started_at: Date;
-      ended_at: Date | null;
-      outcome: string | null;
-      next_action: string | null;
-      step_id: string | null;
-      step_text: string | null;
-    }[]>`
-      select fs.id, fs.task_id, t.title as task_title, fs.planned_minutes,
-             fs.started_at, fs.ended_at, fs.outcome, fs.next_action,
-             s.id as step_id, s.text as step_text
-        from focus_sessions fs
-        join tasks t on t.id = fs.task_id
-        left join steps s on s.id = fs.step_id
-       where fs.id = ${uuid(data.sessionId)}::uuid and fs.user_id = ${user.id}
-       limit 1
-    `;
-    const row = rows[0];
-    if (!row) return { kind: "missing" };
+      const sql = await db();
+      const rows = await sql<{
+        id: string;
+        task_id: string;
+        task_title: string;
+        planned_minutes: number;
+        started_at: Date;
+        ended_at: Date | null;
+        outcome: string | null;
+        next_action: string | null;
+        step_id: string | null;
+        step_text: string | null;
+      }[]>`
+        select fs.id, fs.task_id, t.title as task_title, fs.planned_minutes,
+               fs.started_at, fs.ended_at, fs.outcome, fs.next_action,
+               s.id as step_id, s.text as step_text
+          from focus_sessions fs
+          join tasks t on t.id = fs.task_id
+          left join steps s on s.id = fs.step_id
+         where fs.id = ${uuid(data.sessionId)}::uuid and fs.user_id = ${user.id}
+         limit 1
+      `;
+      const row = rows[0];
+      if (!row) return { kind: "missing" };
 
-    const next = await currentStep(sql, user.id, row.task_id);
-    const openRows = await sql<{ n: number }[]>`
-      select count(*)::int as n from steps
-       where task_id = ${row.task_id}::uuid and user_id = ${user.id} and done = false
-    `;
-    const step: SprintStep | null =
-      row.step_id && row.step_text
-        ? { id: row.step_id, text: row.step_text }
-        : next;
+      const next = await currentStep(sql, user.id, row.task_id);
+      const openRows = await sql<{ n: number }[]>`
+        select count(*)::int as n from steps
+         where task_id = ${row.task_id}::uuid and user_id = ${user.id} and done = false
+      `;
+      const step: SprintStep | null =
+        row.step_id && row.step_text
+          ? { id: row.step_id, text: row.step_text }
+          : next;
 
-    return {
-      kind: "ready",
-      sessionId: row.id,
-      taskId: row.task_id,
-      taskTitle: row.task_title,
-      plannedMinutes: Number(row.planned_minutes),
-      startedAt: iso(row.started_at),
-      endedAt: row.ended_at ? iso(row.ended_at) : null,
-      outcome: cleanOutcome(row.outcome),
-      nextAction:
-        row.next_action === "another" ||
-        row.next_action === "break" ||
-        row.next_action === "later"
-          ? row.next_action
-          : null,
-      step,
-      openSteps: Number(openRows[0]?.n ?? 0),
-      nextStep: next,
-    };
+      return {
+        kind: "ready",
+        sessionId: row.id,
+        taskId: row.task_id,
+        taskTitle: row.task_title,
+        plannedMinutes: Number(row.planned_minutes),
+        startedAt: iso(row.started_at),
+        endedAt: row.ended_at ? iso(row.ended_at) : null,
+        outcome: cleanOutcome(row.outcome),
+        nextAction:
+          row.next_action === "another" ||
+          row.next_action === "break" ||
+          row.next_action === "later"
+            ? row.next_action
+            : null,
+        step,
+        openSteps: Number(openRows[0]?.n ?? 0),
+        nextStep: next,
+      };
+    } catch (error) {
+      return dbFailure(error);
+    }
   });
 
 /**

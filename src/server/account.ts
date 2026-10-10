@@ -1,5 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
-import { db, dbStatus } from "~/db";
+import { db, dbFailure, dbStatus } from "~/db";
 import { clearSessionCookie, currentUser, requireUser } from "~/server/session";
 import type { NotConnected } from "~/server/auth";
 
@@ -50,36 +50,40 @@ export const pageAccount = createServerFn({ method: "POST" }).handler(
         message: status.message,
       };
     }
-    const user = await currentUser();
-    if (!user) return { kind: "signed_out" };
+    try {
+      const user = await currentUser();
+      if (!user) return { kind: "signed_out" };
 
-    const sql = await db();
-    const rows = await sql<
-      {
-        tasks: number;
-        steps: number;
-        sprints: number;
-        planned_days: number;
-        reminder: boolean;
-      }[]
-    >`
-      select
-        (select count(*)::int from tasks where user_id = ${user.id}) as tasks,
-        (select count(*)::int from steps where user_id = ${user.id}) as steps,
-        (select count(*)::int from focus_sessions where user_id = ${user.id}) as sprints,
-        (select count(*)::int from daily_priorities where user_id = ${user.id}) as planned_days,
-        exists (select 1 from reminder_settings where user_id = ${user.id}) as reminder
-    `;
-    const row = rows[0];
-    return {
-      kind: "ready",
-      email: user.email,
-      tasks: Number(row?.tasks ?? 0),
-      steps: Number(row?.steps ?? 0),
-      sprints: Number(row?.sprints ?? 0),
-      plannedDays: Number(row?.planned_days ?? 0),
-      reminder: Boolean(row?.reminder),
-    };
+      const sql = await db();
+      const rows = await sql<
+        {
+          tasks: number;
+          steps: number;
+          sprints: number;
+          planned_days: number;
+          reminder: boolean;
+        }[]
+      >`
+        select
+          (select count(*)::int from tasks where user_id = ${user.id}) as tasks,
+          (select count(*)::int from steps where user_id = ${user.id}) as steps,
+          (select count(*)::int from focus_sessions where user_id = ${user.id}) as sprints,
+          (select count(*)::int from daily_priorities where user_id = ${user.id}) as planned_days,
+          exists (select 1 from reminder_settings where user_id = ${user.id}) as reminder
+      `;
+      const row = rows[0];
+      return {
+        kind: "ready",
+        email: user.email,
+        tasks: Number(row?.tasks ?? 0),
+        steps: Number(row?.steps ?? 0),
+        sprints: Number(row?.sprints ?? 0),
+        plannedDays: Number(row?.planned_days ?? 0),
+        reminder: Boolean(row?.reminder),
+      };
+    } catch (error) {
+      return dbFailure(error);
+    }
   }
 );
 
