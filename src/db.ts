@@ -130,6 +130,40 @@ export function isConfigured(): boolean {
   return Boolean(process.env.DATABASE_URL);
 }
 
+/**
+ * Query parameters a hosted provider adds for *libpq* clients, which postgres.js
+ * does not understand. postgres.js forwards every parameter it finds in the URL
+ * into the startup packet, and a server or pooler that does not recognise one can
+ * refuse the connection outright (Neon's strings carry `channel_binding`; Prisma
+ * and others add `sslrootcert` and `options`). Nothing here is a value we need:
+ * TLS is decided by `sslOption()` from `sslmode`, and the certificate lives in the
+ * pooler, not on our disk. Removing just these three leaves every other parameter
+ * — `sslmode` above all — exactly as the owner's string had it.
+ */
+const UNSUPPORTED_PARAMS = ["channel_binding", "sslrootcert", "options"];
+
+/**
+ * Strip the parameters above before postgres.js sees the URL. Returns the URL
+ * untouched when there is nothing to strip (or it does not parse as a URL), so
+ * the common case is byte-for-byte the owner's string.
+ */
+export function stripUnsupportedParams(url: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return url;
+  }
+  let stripped = false;
+  for (const name of UNSUPPORTED_PARAMS) {
+    if (parsed.searchParams.has(name)) {
+      parsed.searchParams.delete(name);
+      stripped = true;
+    }
+  }
+  return stripped ? parsed.toString() : url;
+}
+
 function connect(): postgres.Sql {
   const url = process.env.DATABASE_URL;
   if (!url) {
@@ -137,13 +171,15 @@ function connect(): postgres.Sql {
       "DATABASE_URL is not set — connect the database from the owner's database card before storing data."
     );
   }
-  client ??= postgres(url, {
+  client ??= postgres(stripUnsupportedParams(url), {
     max: 4,
     idle_timeout: 20,
     connect_timeout: 12,
     // Managed poolers (Neon/Supavisor, Tiger Cloud) run in transaction mode and
     // reject session-level prepared statements; unnamed statements always work.
     prepare: false,
+    // Read from the original string: stripping the parameters above must not
+    // change how `sslmode` is interpreted.
     ssl: sslOption(url),
     onnotice: () => {},
   });
