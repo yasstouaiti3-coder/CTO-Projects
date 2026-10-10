@@ -186,10 +186,27 @@ function connect(): postgres.Sql {
   return client;
 }
 
+/**
+ * The schema is created on the first request that needs a table: 15 idempotent
+ * statements, run once per process. On a cold hosted database that is normally a
+ * second or two, but a host that accepts the connection and then stalls (or a
+ * pooler that queues us) would otherwise hold the first page load open for as
+ * long as it likes — `connect_timeout` only covers getting the socket, not the
+ * work that follows. This bound turns that stall into the honest "can't reach
+ * your account" screen a few seconds later, and the next request retries.
+ */
+const SCHEMA_TIMEOUT_MS = 20_000;
+
 async function runSchema(sql: postgres.Sql): Promise<void> {
-  for (const statement of SCHEMA_STATEMENTS) {
-    await sql.unsafe(statement);
-  }
+  await withTimeout(
+    (async () => {
+      for (const statement of SCHEMA_STATEMENTS) {
+        await sql.unsafe(statement);
+      }
+    })(),
+    SCHEMA_TIMEOUT_MS,
+    "Creating the database schema timed out."
+  );
 }
 
 /**
