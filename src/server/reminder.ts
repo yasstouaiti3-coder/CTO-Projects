@@ -1,5 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
-import { db, dbStatus } from "~/db";
+import { db, dbFailure, dbStatus } from "~/db";
 import { currentUser, requireUser } from "~/server/session";
 import type { NotConnected } from "~/server/auth";
 
@@ -56,32 +56,36 @@ export const pageReminder = createServerFn({ method: "POST" }).handler(
         message: status.message,
       };
     }
-    const user = await currentUser();
-    if (!user) return { kind: "signed_out" };
+    try {
+      const user = await currentUser();
+      if (!user) return { kind: "signed_out" };
 
-    const sql = await db();
-    const rows = await sql<
-      { enabled: boolean; at_time: string; last_shown_on: Date | null }[]
-    >`
-      select enabled, at_time, last_shown_on
-        from reminder_settings
-       where user_id = ${user.id}
-       limit 1
-    `;
-    const row = rows[0];
-    return {
-      kind: "ready",
-      email: user.email,
-      reminder: {
-        enabled: Boolean(row?.enabled ?? false),
-        time: TIME_PATTERN.test(String(row?.at_time ?? ""))
-          ? String(row.at_time)
-          : DEFAULT_TIME,
-        lastShownOn: row?.last_shown_on
-          ? String(row.last_shown_on).slice(0, 10)
-          : null,
-      },
-    };
+      const sql = await db();
+      const rows = await sql<
+        { enabled: boolean; at_time: string; last_shown_on: Date | null }[]
+      >`
+        select enabled, at_time, last_shown_on
+          from reminder_settings
+         where user_id = ${user.id}
+         limit 1
+      `;
+      const row = rows[0];
+      return {
+        kind: "ready",
+        email: user.email,
+        reminder: {
+          enabled: Boolean(row?.enabled ?? false),
+          time: TIME_PATTERN.test(String(row?.at_time ?? ""))
+            ? String(row.at_time)
+            : DEFAULT_TIME,
+          lastShownOn: row?.last_shown_on
+            ? String(row.last_shown_on).slice(0, 10)
+            : null,
+        },
+      };
+    } catch (error) {
+      return dbFailure(error);
+    }
   }
 );
 

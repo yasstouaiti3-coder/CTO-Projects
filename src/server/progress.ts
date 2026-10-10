@@ -1,5 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
-import { db, dbStatus } from "~/db";
+import { db, dbFailure, dbStatus } from "~/db";
 import { currentUser } from "~/server/session";
 import type { NotConnected } from "~/server/auth";
 
@@ -29,27 +29,31 @@ export const pageProgress = createServerFn({ method: "POST" }).handler(
         message: status.message,
       };
     }
-    const user = await currentUser();
-    if (!user) return { kind: "signed_out" };
+    try {
+      const user = await currentUser();
+      if (!user) return { kind: "signed_out" };
 
-    const sql = await db();
-    // `finished` counts the sprints the person accounted for, not the ones that
-    // merely got closed: a sprint that ran out of time is closed automatically
-    // with `outcome` still null, and the page promises the second number only
-    // counts sprints they said something about. Counting `ended_at` would claim
-    // more than the words support.
-    const rows = await sql<{ started: number; finished: number }[]>`
-      select count(*)::int as started,
-             count(outcome)::int as finished
-        from focus_sessions
-       where user_id = ${user.id}
-    `;
-    const row = rows[0];
-    return {
-      kind: "ready",
-      email: user.email,
-      started: Number(row?.started ?? 0),
-      finished: Number(row?.finished ?? 0),
-    };
+      const sql = await db();
+      // `finished` counts the sprints the person accounted for, not the ones that
+      // merely got closed: a sprint that ran out of time is closed automatically
+      // with `outcome` still null, and the page promises the second number only
+      // counts sprints they said something about. Counting `ended_at` would claim
+      // more than the words support.
+      const rows = await sql<{ started: number; finished: number }[]>`
+        select count(*)::int as started,
+               count(outcome)::int as finished
+          from focus_sessions
+         where user_id = ${user.id}
+      `;
+      const row = rows[0];
+      return {
+        kind: "ready",
+        email: user.email,
+        started: Number(row?.started ?? 0),
+        finished: Number(row?.finished ?? 0),
+      };
+    } catch (error) {
+      return dbFailure(error);
+    }
   }
 );

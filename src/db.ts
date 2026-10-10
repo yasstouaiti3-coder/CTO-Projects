@@ -267,6 +267,39 @@ export async function dbStatus(): Promise<DbStatus> {
   return status;
 }
 
+/**
+ * The shape a page loader returns when it cannot reach the database. Identical to
+ * `NotConnected` in `~/server/auth`, which owns the wording for the calm screen.
+ */
+export type NotConnectedState = {
+  kind: "not_connected";
+  reason: "missing" | "unreachable";
+  message: string;
+};
+
+/**
+ * The honest screen for a loader whose *queries* failed after the health probe
+ * said the database was fine.
+ *
+ * `dbStatus()` caches a successful probe for 20s, so a database that dies inside
+ * that window throws straight out of the loader into the router, which replaces
+ * the whole page with a crash screen. Loaders catch it right there — around the
+ * queries, not around the mapping that turns rows into a page — and return this
+ * instead, which renders the same calm "can't reach your account" copy.
+ *
+ * The error is always logged: a database that is down and a bug in our own SQL
+ * look the same to the person on the screen, but they must not look the same to
+ * us in the server log.
+ */
+export function dbFailure(error: unknown): NotConnectedState {
+  console.error("[focuspilot] database query failed:", error);
+  return {
+    kind: "not_connected",
+    reason: "unreachable",
+    message: "The database could not be reached just now.",
+  };
+}
+
 export async function withTimeout<T>(
   work: PromiseLike<T>,
   ms: number,

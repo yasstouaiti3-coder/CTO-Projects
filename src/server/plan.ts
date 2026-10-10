@@ -1,5 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
-import { db, dbStatus } from "~/db";
+import { db, dbFailure, dbStatus } from "~/db";
 import { currentUser, requireUser } from "~/server/session";
 import type { NotConnected } from "~/server/auth";
 
@@ -57,50 +57,54 @@ export const pagePlan = createServerFn({ method: "POST" }).handler(
         message: status.message,
       };
     }
-    const user = await currentUser();
-    if (!user) return { kind: "signed_out" };
+    try {
+      const user = await currentUser();
+      if (!user) return { kind: "signed_out" };
 
-    const sql = await db();
-    const planned = await sql<
-      { id: string; task_id: string; title: string; position: number; status: string }[]
-    >`
-      select p.id, p.task_id, t.title, p.position, t.status
-        from daily_priorities p
-        join tasks t on t.id = p.task_id and t.user_id = p.user_id
-       where p.user_id = ${user.id} and p.day = current_date
-       order by p.position asc
-    `;
-    const tasks = await sql<{ id: string; title: string; open_steps: number }[]>`
-      select t.id,
-             t.title,
-             (select count(*)::int from steps s
-               where s.task_id = t.id and s.done = false) as open_steps
-        from tasks t
-       where t.user_id = ${user.id} and t.status = 'active'
-       order by t.created_at desc
-    `;
-    const plannedIds = new Set(planned.map((row) => row.task_id));
+      const sql = await db();
+      const planned = await sql<
+        { id: string; task_id: string; title: string; position: number; status: string }[]
+      >`
+        select p.id, p.task_id, t.title, p.position, t.status
+          from daily_priorities p
+          join tasks t on t.id = p.task_id and t.user_id = p.user_id
+         where p.user_id = ${user.id} and p.day = current_date
+         order by p.position asc
+      `;
+      const tasks = await sql<{ id: string; title: string; open_steps: number }[]>`
+        select t.id,
+               t.title,
+               (select count(*)::int from steps s
+                 where s.task_id = t.id and s.done = false) as open_steps
+          from tasks t
+         where t.user_id = ${user.id} and t.status = 'active'
+         order by t.created_at desc
+      `;
+      const plannedIds = new Set(planned.map((row) => row.task_id));
 
-    return {
-      kind: "ready",
-      email: user.email,
-      priorities: planned.map((row) => ({
-        id: row.id,
-        taskId: row.task_id,
-        title: row.title,
-        position: Number(row.position ?? 0),
-        finished: row.status !== "active",
-      })),
-      candidates: tasks
-        .filter((task) => !plannedIds.has(task.id))
-        .map((task) => ({
-          id: task.id,
-          title: task.title,
-          openSteps: Number(task.open_steps ?? 0),
+      return {
+        kind: "ready",
+        email: user.email,
+        priorities: planned.map((row) => ({
+          id: row.id,
+          taskId: row.task_id,
+          title: row.title,
+          position: Number(row.position ?? 0),
+          finished: row.status !== "active",
         })),
-      full: planned.length >= MAX_PRIORITIES,
-      hasTasks: tasks.length > 0,
-    };
+        candidates: tasks
+          .filter((task) => !plannedIds.has(task.id))
+          .map((task) => ({
+            id: task.id,
+            title: task.title,
+            openSteps: Number(task.open_steps ?? 0),
+          })),
+        full: planned.length >= MAX_PRIORITIES,
+        hasTasks: tasks.length > 0,
+      };
+    } catch (error) {
+      return dbFailure(error);
+    }
   }
 );
 
