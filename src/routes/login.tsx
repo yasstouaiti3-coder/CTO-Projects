@@ -1,0 +1,105 @@
+import { useState } from "react";
+import { createFileRoute, Link, redirect } from "@tanstack/react-router";
+import { logIn, pageAuth } from "~/server/auth";
+import {
+  Hint,
+  NotConnected,
+  Shell,
+  inputClass,
+  primaryButton,
+  quietButton,
+} from "~/components/Shell";
+
+export const Route = createFileRoute("/login")({
+  loader: async () => {
+    const data = await pageAuth();
+    if (data.kind === "signed_in") throw redirect({ to: "/tasks" });
+    return data;
+  },
+  component: LogInPage,
+});
+
+function LogInPage() {
+  const data = Route.useLoaderData();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  if (data.kind === "not_connected") {
+    return <NotConnected reason={data.reason} />;
+  }
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await logIn({ data: { email, password } });
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+      // Full load, so the new session cookie is what the next request sends.
+      window.location.assign("/tasks");
+    } catch {
+      setError("That didn't go through. Try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Shell>
+      <div className="max-w-sm space-y-6 pt-8">
+        <div className="space-y-3">
+          <h1 className="text-2xl font-semibold text-stone-900">
+            Welcome back
+          </h1>
+          <Hint>Sign in and pick up where you left off.</Hint>
+        </div>
+
+        <form onSubmit={submit} method="post" action="/login" className="space-y-4">
+          <label className="block space-y-2">
+            <span className="text-sm text-stone-600">Email</span>
+            <input
+              type="email"
+              name="email"
+              autoComplete="email"
+              required
+              value={email}
+              onChange={(event) => {
+                setEmail(event.target.value);
+              }}
+              className={inputClass}
+            />
+          </label>
+          <label className="block space-y-2">
+            <span className="text-sm text-stone-600">Password</span>
+            <input
+              type="password"
+              name="password"
+              autoComplete="current-password"
+              required
+              value={password}
+              onChange={(event) => {
+                setPassword(event.target.value);
+              }}
+              className={inputClass}
+            />
+          </label>
+
+          {error ? <p className="text-sm text-red-700">{error}</p> : null}
+
+          <button type="submit" disabled={busy} className={primaryButton}>
+            {busy ? "Signing in…" : "Sign in"}
+          </button>
+        </form>
+
+        <Link to="/signup" className={quietButton}>
+          Create an account instead
+        </Link>
+      </div>
+    </Shell>
+  );
+}

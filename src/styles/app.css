@@ -1,0 +1,21 @@
+@import "tailwindcss";
+
+@layer base {
+  /* FocusPilot is deliberately light and calm. */
+  html {
+    color-scheme: light;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-stone-50 text-stone-900 antialiased;
+  }
+
+  ::selection {
+    @apply bg-indigo-100;
+  }
+
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-indigo-500;
+  }
+}
