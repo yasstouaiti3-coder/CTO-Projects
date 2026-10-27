@@ -130,6 +130,40 @@ export function isConfigured(): boolean {
   return Boolean(process.env.DATABASE_URL);
 }
 
+/**
+ * Query parameters a hosted provider adds for *libpq* clients, which postgres.js
+ * does not understand. postgres.js forwards every parameter it finds in the URL
+ * into the startup packet, and a server or pooler that does not recognise one can
+ * refuse the connection outright (Neon's strings carry `channel_binding`; Prisma
+ * and others add `sslrootcert` and `options`). Nothing here is a value we need:
+ * TLS is decided by `sslOption()` from `sslmode`, and the certificate lives in the
+ * pooler, not on our disk. Removing just these three leaves every other parameter
+ * — `sslmode` above all — exactly as the owner's string had it.
+ */
+const UNSUPPORTED_PARAMS = ["channel_binding", "sslrootcert", "options"];
+
+/**
+ * Strip the parameters above before postgres.js sees the URL. Returns the URL
+ * untouched when there is nothing to strip (or it does not parse as a URL), so
+ * the common case is byte-for-byte the owner's string.
+ */
+export function stripUnsupportedParams(url: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return url;
+  }
+  let stripped = false;
+  for (const name of UNSUPPORTED_PARAMS) {
+    if (parsed.searchParams.has(name)) {
+      parsed.searchParams.delete(name);
+      stripped = true;
+    }
+  }
+  return stripped ? parsed.toString() : url;
+}
+
 function connect(): postgres.Sql {
   const url = process.env.DATABASE_URL;
   if (!url) {
@@ -137,23 +171,42 @@ function connect(): postgres.Sql {
       "DATABASE_URL is not set — connect the database from the owner's database card before storing data."
     );
   }
-  client ??= postgres(url, {
+  client ??= postgres(stripUnsupportedParams(url), {
     max: 4,
     idle_timeout: 20,
     connect_timeout: 12,
     // Managed poolers (Neon/Supavisor, Tiger Cloud) run in transaction mode and
     // reject session-level prepared statements; unnamed statements always work.
     prepare: false,
+    // Read from the original string: stripping the parameters above must not
+    // change how `sslmode` is interpreted.
     ssl: sslOption(url),
     onnotice: () => {},
   });
   return client;
 }
 
+/**
+ * The schema is created on the first request that needs a table: 15 idempotent
+ * statements, run once per process. On a cold hosted database that is normally a
+ * second or two, but a host that accepts the connection and then stalls (or a
+ * pooler that queues us) would otherwise hold the first page load open for as
+ * long as it likes — `connect_timeout` only covers getting the socket, not the
+ * work that follows. This bound turns that stall into the honest "can't reach
+ * your account" screen a few seconds later, and the next request retries.
+ */
+const SCHEMA_TIMEOUT_MS = 20_000;
+
 async function runSchema(sql: postgres.Sql): Promise<void> {
-  for (const statement of SCHEMA_STATEMENTS) {
-    await sql.unsafe(statement);
-  }
+  await withTimeout(
+    (async () => {
+      for (const statement of SCHEMA_STATEMENTS) {
+        await sql.unsafe(statement);
+      }
+    })(),
+    SCHEMA_TIMEOUT_MS,
+    "Creating the database schema timed out."
+  );
 }
 
 /**
@@ -212,6 +265,39 @@ export async function dbStatus(): Promise<DbStatus> {
   }
   cached = { at: Date.now(), status };
   return status;
+}
+
+/**
+ * The shape a page loader returns when it cannot reach the database. Identical to
+ * `NotConnected` in `~/server/auth`, which owns the wording for the calm screen.
+ */
+export type NotConnectedState = {
+  kind: "not_connected";
+  reason: "missing" | "unreachable";
+  message: string;
+};
+
+/**
+ * The honest screen for a loader whose *queries* failed after the health probe
+ * said the database was fine.
+ *
+ * `dbStatus()` caches a successful probe for 20s, so a database that dies inside
+ * that window throws straight out of the loader into the router, which replaces
+ * the whole page with a crash screen. Loaders catch it right there — around the
+ * queries, not around the mapping that turns rows into a page — and return this
+ * instead, which renders the same calm "can't reach your account" copy.
+ *
+ * The error is always logged: a database that is down and a bug in our own SQL
+ * look the same to the person on the screen, but they must not look the same to
+ * us in the server log.
+ */
+export function dbFailure(error: unknown): NotConnectedState {
+  console.error("[focuspilot] database query failed:", error);
+  return {
+    kind: "not_connected",
+    reason: "unreachable",
+    message: "The database could not be reached just now.",
+  };
 }
 
 export async function withTimeout<T>(

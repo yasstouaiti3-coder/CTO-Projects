@@ -1,5 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
-import { db, dbStatus, iso } from "~/db";
+import { db, dbFailure, dbStatus, iso } from "~/db";
 import { currentUser, requireUser } from "~/server/session";
 import type { NotConnected } from "~/server/auth";
 import type { OpenSprint } from "~/server/focus";
@@ -78,53 +78,57 @@ export const pageTasks = createServerFn({ method: "POST" }).handler(
         message: status.message,
       };
     }
-    const user = await currentUser();
-    if (!user) return { kind: "signed_out" };
+    try {
+      const user = await currentUser();
+      if (!user) return { kind: "signed_out" };
 
-    const sql = await db();
-    const rows = await sql<TaskDbRow[]>`
-      select t.id,
-             t.title,
-             t.status,
-             t.created_at,
-             (select count(*)::int from steps s where s.task_id = t.id) as step_count,
-             open.id as sprint_id,
-             open.planned_minutes as sprint_minutes,
-             open.started_at as sprint_started,
-             open.running as sprint_running
-        from tasks t
-        left join lateral (
-          select fs.id, fs.planned_minutes, fs.started_at,
-                 (fs.started_at + (fs.planned_minutes * interval '1 minute')) > now()
-                   as running
-            from focus_sessions fs
-           where fs.user_id = t.user_id and fs.task_id = t.id and fs.ended_at is null
-           order by fs.started_at desc
-           limit 1
-        ) open on true
-       where t.user_id = ${user.id}
-       order by case t.status when 'active' then 0 when 'done' then 1 else 2 end,
-                t.created_at desc
-    `;
-    return {
-      kind: "ready",
-      email: user.email,
-      tasks: rows.map((row) => ({
-        id: row.id,
-        title: row.title,
-        status: row.status,
-        created_at: String(row.created_at),
-        step_count: Number(row.step_count ?? 0),
-        sprint: row.sprint_id
-          ? {
-              sessionId: row.sprint_id,
-              plannedMinutes: Number(row.sprint_minutes ?? 0),
-              startedAt: iso(row.sprint_started),
-              running: Boolean(row.sprint_running),
-            }
-          : null,
-      })),
-    };
+      const sql = await db();
+      const rows = await sql<TaskDbRow[]>`
+        select t.id,
+               t.title,
+               t.status,
+               t.created_at,
+               (select count(*)::int from steps s where s.task_id = t.id) as step_count,
+               open.id as sprint_id,
+               open.planned_minutes as sprint_minutes,
+               open.started_at as sprint_started,
+               open.running as sprint_running
+          from tasks t
+          left join lateral (
+            select fs.id, fs.planned_minutes, fs.started_at,
+                   (fs.started_at + (fs.planned_minutes * interval '1 minute')) > now()
+                     as running
+              from focus_sessions fs
+             where fs.user_id = t.user_id and fs.task_id = t.id and fs.ended_at is null
+             order by fs.started_at desc
+             limit 1
+          ) open on true
+         where t.user_id = ${user.id}
+         order by case t.status when 'active' then 0 when 'done' then 1 else 2 end,
+                  t.created_at desc
+      `;
+      return {
+        kind: "ready",
+        email: user.email,
+        tasks: rows.map((row) => ({
+          id: row.id,
+          title: row.title,
+          status: row.status,
+          created_at: String(row.created_at),
+          step_count: Number(row.step_count ?? 0),
+          sprint: row.sprint_id
+            ? {
+                sessionId: row.sprint_id,
+                plannedMinutes: Number(row.sprint_minutes ?? 0),
+                startedAt: iso(row.sprint_started),
+                running: Boolean(row.sprint_running),
+              }
+            : null,
+        })),
+      };
+    } catch (error) {
+      return dbFailure(error);
+    }
   }
 );
 
@@ -139,66 +143,70 @@ export const pageTask = createServerFn({ method: "POST" })
         message: status.message,
       };
     }
-    const user = await currentUser();
-    if (!user) return { kind: "signed_out" };
+    try {
+      const user = await currentUser();
+      if (!user) return { kind: "signed_out" };
 
-    const sql = await db();
-    const taskId = id(data.taskId);
-    const tasks = await sql<TaskDbRow[]>`
-      select t.id, t.title, t.status, t.created_at,
-             (select count(*)::int from steps s where s.task_id = t.id) as step_count,
-             open.id as sprint_id,
-             open.planned_minutes as sprint_minutes,
-             open.started_at as sprint_started,
-             open.running as sprint_running
-        from tasks t
-        left join lateral (
-          select fs.id, fs.planned_minutes, fs.started_at,
-                 (fs.started_at + (fs.planned_minutes * interval '1 minute')) > now()
-                   as running
-            from focus_sessions fs
-           where fs.user_id = t.user_id and fs.task_id = t.id and fs.ended_at is null
-           order by fs.started_at desc
-           limit 1
-        ) open on true
-       where t.id = ${taskId}::uuid and t.user_id = ${user.id}
-       limit 1
-    `;
-    const task = tasks[0];
-    if (!task) return { kind: "missing" };
+      const sql = await db();
+      const taskId = id(data.taskId);
+      const tasks = await sql<TaskDbRow[]>`
+        select t.id, t.title, t.status, t.created_at,
+               (select count(*)::int from steps s where s.task_id = t.id) as step_count,
+               open.id as sprint_id,
+               open.planned_minutes as sprint_minutes,
+               open.started_at as sprint_started,
+               open.running as sprint_running
+          from tasks t
+          left join lateral (
+            select fs.id, fs.planned_minutes, fs.started_at,
+                   (fs.started_at + (fs.planned_minutes * interval '1 minute')) > now()
+                     as running
+              from focus_sessions fs
+             where fs.user_id = t.user_id and fs.task_id = t.id and fs.ended_at is null
+             order by fs.started_at desc
+             limit 1
+          ) open on true
+         where t.id = ${taskId}::uuid and t.user_id = ${user.id}
+         limit 1
+      `;
+      const task = tasks[0];
+      if (!task) return { kind: "missing" };
 
-    const steps = await sql<StepRow[]>`
-      select id, text, position, source, done
-        from steps
-       where task_id = ${task.id} and user_id = ${user.id}
-       order by position asc, created_at asc
-    `;
-    return {
-      kind: "ready",
-      email: user.email,
-      task: {
-        id: task.id,
-        title: task.title,
-        status: task.status,
-        created_at: String(task.created_at),
-        step_count: steps.length,
-        sprint: task.sprint_id
-          ? {
-              sessionId: task.sprint_id,
-              plannedMinutes: Number(task.sprint_minutes ?? 0),
-              startedAt: iso(task.sprint_started),
-              running: Boolean(task.sprint_running),
-            }
-          : null,
-      },
-      steps: steps.map((step) => ({
-        id: step.id,
-        text: step.text,
-        position: Number(step.position ?? 0),
-        source: step.source,
-        done: Boolean(step.done),
-      })),
-    };
+      const steps = await sql<StepRow[]>`
+        select id, text, position, source, done
+          from steps
+         where task_id = ${task.id} and user_id = ${user.id}
+         order by position asc, created_at asc
+      `;
+      return {
+        kind: "ready",
+        email: user.email,
+        task: {
+          id: task.id,
+          title: task.title,
+          status: task.status,
+          created_at: String(task.created_at),
+          step_count: steps.length,
+          sprint: task.sprint_id
+            ? {
+                sessionId: task.sprint_id,
+                plannedMinutes: Number(task.sprint_minutes ?? 0),
+                startedAt: iso(task.sprint_started),
+                running: Boolean(task.sprint_running),
+              }
+            : null,
+        },
+        steps: steps.map((step) => ({
+          id: step.id,
+          text: step.text,
+          position: Number(step.position ?? 0),
+          source: step.source,
+          done: Boolean(step.done),
+        })),
+      };
+    } catch (error) {
+      return dbFailure(error);
+    }
   });
 
 export const addTask = createServerFn({ method: "POST" })
